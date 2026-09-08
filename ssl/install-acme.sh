@@ -657,12 +657,25 @@ for DOMAIN in "${DOMAINS[@]}"; do
 
     log "申请 Let's Encrypt ECC 证书：${DOMAIN}"
 
+    # 容错：acme.sh 对已有未到期证书返回 exit 2（Skip 语义），
+    # 不应中断流程，应继续部署现有证书。
+    set +e
     "${ACME_BIN}" \
         --issue \
         --server letsencrypt \
         --dns "${DNS_PLUGIN}" \
         -d "${DOMAIN}" \
         --keylength ec-256
+    issue_rc=$?
+    set -e
+
+    if [ "$issue_rc" -ne 0 ] && [ "$issue_rc" -ne 2 ]; then
+        die "证书签发失败（exit $issue_rc）：${DOMAIN}"
+    fi
+
+    if [ "$issue_rc" -eq 2 ]; then
+        log "证书已存在且未到期（skip），继续部署现有证书：${DOMAIN}"
+    fi
 
 
     ###########################################################################
@@ -673,6 +686,7 @@ for DOMAIN in "${DOMAINS[@]}"; do
 
     "${ACME_BIN}" \
         --install-cert \
+        --ecc \
         -d "${DOMAIN}" \
         --key-file "${CERT_DIR}/privkey.pem" \
         --fullchain-file "${CERT_DIR}/fullchain.pem" \
