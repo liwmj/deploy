@@ -558,8 +558,39 @@ if [[ ! -x "${ACME_BIN}" ]]; then
 
     log "开始安装 acme.sh..."
 
-    curl -fsSL "${ACME_INSTALL_URL}" \
-        | sh -s -- "email=${EMAIL}"
+    mkdir -p "$(dirname "${ACME_BIN}")"
+
+    if curl -fsSL "${ACME_INSTALL_URL}" -o "${ACME_BIN}"; then
+        chmod +x "${ACME_BIN}"
+        info "acme.sh 主脚本已下载: ${ACME_BIN}"
+    else
+        die "下载 acme.sh 失败: ${ACME_INSTALL_URL}"
+    fi
+
+    # 注册 Let's Encrypt 账号并尝试安装 cron（失败不阻断，下方有兜底）
+    ( cd "$(dirname "${ACME_BIN}")" && "${ACME_BIN}" --install --home "${ACME_HOME}" -m "${EMAIL}" >/dev/null 2>&1 ) || true
+
+    # 下载 DNS API 插件（acme.sh 主脚本不含 dnsapi，必须单独拉）
+    case "${DNS_PROVIDER}" in
+        aliyun)  DNSAPI_FILE="dns_ali.sh" ;;
+        tencent) DNSAPI_FILE="dns_tencent.sh" ;;
+        *)       DNSAPI_FILE="" ;;
+    esac
+    if [[ -n "${DNSAPI_FILE}" ]]; then
+        mkdir -p "${ACME_HOME}/dnsapi"
+        if curl -fsSL "https://gitee.com/acmesh-official/acme.sh/raw/master/dnsapi/${DNSAPI_FILE}" -o "${ACME_HOME}/dnsapi/${DNSAPI_FILE}"; then
+            chmod +x "${ACME_HOME}/dnsapi/${DNSAPI_FILE}"
+            info "DNS API 插件已下载: dnsapi/${DNSAPI_FILE}"
+        else
+            warn "DNS API 插件下载失败，证书签发可能失败: dnsapi/${DNSAPI_FILE}"
+        fi
+    fi
+
+    # 兜底：确保 acme.sh 自动续期 cron 存在（后续流程会校验）
+    if ! crontab -l 2>/dev/null | grep -Fq "${ACME_BIN}"; then
+        info "手动添加 acme.sh 自动续期 cron..."
+        ( crontab -l 2>/dev/null; echo "0 0 * * * ${ACME_BIN} --cron --home ${ACME_HOME} > /dev/null" ) | crontab - || true
+    fi
 
     [[ -x "${ACME_BIN}" ]] \
         || die "acme.sh 安装失败。"
